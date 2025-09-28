@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="en" data-bs-theme="dark">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Stock Market Trend Analysis</title>
+
+  <!-- Bootswatch (Darkly) + Bootstrap Icons -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootswatch@5.3.3/dist/darkly/bootstrap.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap.min.css">
+
+  <style>
+    :root {
+      --app-bg: #0b0f14;
+      --panel-bg: #11161c;
+      --panel-border: #1b2530;
+      --muted: #9db0c6;
+    }
+
+    body {
+      background: var(--app-bg);
+    }
+
+    .navbar {
+      background: #0d1218;
+      border-bottom: 1px solid var(--panel-border);
+    }
+
+    .navbar .navbar-brand {
+      color: #eaf5ff !important;
+    }
+
+    .sidebar {
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      border-radius: 16px;
+      position: sticky;
+      top: 1rem;
+    }
+
+    .content-card {
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      border-radius: 16px;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    /* Preview table */
+    .table-preview {
+      max-height: 360px;
+      overflow: auto;
+      border-radius: 12px;
+    }
+
+    .table-preview table {
+      color: #eef6ff;
+      background: #0f141b;
+    }
+
+    .table-preview thead th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: #0f141b;
+      color: #fff;
+      border-bottom: 1px solid #243040;
+    }
+
+    .table-preview tbody td {
+      border-color: #243040;
+    }
+
+    .table-preview::-webkit-scrollbar {
+      width: 10px;
+    }
+
+    .table-preview::-webkit-scrollbar-thumb {
+      background: #243040;
+      border-radius: 8px;
+    }
+
+    /* Date picker buttons */
+    .date-picker .btn {
+      border-color: #243040;
+    }
+
+    .date-picker .btn:hover {
+      background: #1a2230;
+    }
+
+    /* Summary chips / tiles */
+    .kpi {
+      background: #0f141b;
+      border: 1px solid #243040;
+      border-radius: 12px;
+      padding: 12px 14px;
+      height: 100%;
+    }
+
+    .kpi .kpi-label {
+      font-size: .72rem;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      color: #9db0c6;
+      margin-bottom: 4px;
+    }
+
+    .kpi .kpi-value {
+      font-weight: 700;
+      font-size: 1.15rem;
+      line-height: 1.2;
+    }
+
+    .kpi .kpi-sub {
+      font-size: .8rem;
+      color: #9db0c6;
+      margin-top: 2px;
+    }
+
+    /* Compact definition list */
+    .dl-compact dt {
+      font-size: .75rem;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      color: #9db0c6;
+      margin-top: .5rem;
+    }
+
+    .dl-compact dd {
+      margin-bottom: .25rem;
+      font-weight: 600;
+    }
+
+    /* Section separators inside the card */
+    .section-sep {
+      border-top: 1px dashed #223040;
+      margin: .75rem 0 1rem;
+    }
+  </style>
+</head>
+
+<body>
+  <!-- Top bar -->
+  <nav class="navbar navbar-expand-lg mb-4">
+    <div class="container-fluid">
+      <span class="navbar-brand fw-semibold">
+        <i class="bi bi-graph-up-arrow me-2"></i>Project 1: Stock Market Trend Analysis
+      </span>
+    </div>
+  </nav>
+
+  <div class="container-fluid">
+    <div class="row g-4">
+      <!-- Sidebar / Controls -->
+      <div class="col-12 col-lg-3">
+        <div class="sidebar p-3 p-lg-4">
+          <h6 class="text-uppercase muted mb-3">Data &amp; Settings</h6>
+
+          {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+          {% for category, message in messages %}
+          <div class="alert alert-{{category}} py-2 px-3 small">{{ message }}</div>
+          {% endfor %}
+          {% endif %}
+          {% endwith %}
+
+          <form method="POST" class="vstack gap-3">
+            <div>
+              <label class="form-label">Ticker</label>
+              <div class="input-group">
+                <span class="input-group-text"><i class="bi bi-currency-dollar"></i></span>
+                <input type="text" class="form-control" name="ticker" placeholder="e.g., AAPL" required>
+              </div>
+            </div>
+
+            <!-- Start/End date with calendar buttons -->
+            <div class="row g-2">
+              <div class="col-6">
+                <label class="form-label">Start date</label>
+                <div class="input-group date-picker">
+                  <input type="date" class="form-control" name="start_date" id="start_date" aria-label="Start date">
+                  <button class="btn btn-outline-secondary" type="button" id="btn_start"
+                    aria-label="Open start date picker">
+                    <i class="bi bi-calendar-event"></i>
+                  </button>
+                </div>
+              </div>
+              <div class="col-6">
+                <label class="form-label">End date</label>
+                <div class="input-group date-picker">
+                  <input type="date" class="form-control" name="end_date" id="end_date" aria-label="End date">
+                  <button class="btn btn-outline-secondary" type="button" id="btn_end"
+                    aria-label="Open end date picker">
+                    <i class="bi bi-calendar-event"></i>
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div class="small text-muted">Tip: use the calendar icons. Leave both blank to load the last 3 years.</div>
+
+            <div>
+              <label class="form-label">SMA #1 (days)</label>
+              <input type="number" class="form-control" name="sma_window1" value="20" min="2" max="250" required>
+            </div>
+
+            <div>
+              <div class="form-check mb-2">
+                <input class="form-check-input" type="checkbox" id="sma2Toggle" name="sma2_enabled">
+                <label class="form-check-label" for="sma2Toggle">Enable SMA #2</label>
+              </div>
+              <label class="form-label">SMA #2 (days)</label>
+              <input type="number" class="form-control" name="sma_window2" placeholder="e.g., 50" min="2" max="250"
+                id="sma2">
+            </div>
+
+            <div>
+              <label class="form-label d-flex align-items-center">
+                Min run length to highlight (days)
+                <i class="bi bi-question-circle ms-2 text-muted" data-bs-toggle="tooltip" data-bs-placement="right"
+                  title="A run is a streak of days where the close keeps moving in the same direction (up or down). This sets the minimum streak length to highlight — shorter, noisy streaks are ignored."></i>
+              </label>
+              <input type="number" class="form-control" name="min_run_len" value="2" min="1" max="10">
+              <div class="form-text">Increase to hide short, noisy streaks.</div>
+            </div>
+
+            <button class="btn btn-primary w-100">
+              <i class="bi bi-play-fill me-1"></i>Run Analysis
+            </button>
+          </form>
+        </div>
+      </div>
+
+      <!-- Main content -->
+      <div class="col-12 col-lg-9">
+        <!-- CHARTS ON TOP -->
+        <div class="row g-4">
+          <div class="col-12 col-xl-6">
+            <div class="content-card p-3 p-lg-4 h-100">
+              <h5 class="mb-3"><i class="bi bi-activity me-2"></i>Price &amp; SMA</h5>
+              {% if chart1_html %}
+              {{ chart1_html|safe }}
+              {% else %}
+              <div class="text-center muted py-5">Run an analysis to see this chart.</div>
+              {% endif %}
+            </div>
+          </div>
+
+          <div class="col-12 col-xl-6">
+            <div class="content-card p-3 p-lg-4 h-100">
+              <h5 class="mb-3"><i class="bi bi-candlestick me-2"></i>Candlesticks</h5>
+              {% if chart2_html %}
+              {{ chart2_html|safe }}
+              {% else %}
+              <div class="text-center muted py-5">Run an analysis to see this chart.</div>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+
+        <!-- INFO CARDS BELOW -->
+        <div class="row g-4 mt-1">
+          <!-- Preview -->
+          <div class="col-12 col-xl-6">
+            <div class="content-card p-3 p-xl-4 h-100">
+              <h6 class="mb-3"><i class="bi bi-table me-2"></i>Preview (most recent first)</h6>
+              <div class="table-preview">
+                {% if df_preview %}
+                {{ df_preview|safe }}
+                {% else %}
+                <div class="muted p-2">No data loaded yet.</div>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+
+          <!-- Dataset Summary (clean version) -->
+          <div class="col-12 col-xl-6">
+            <div class="content-card p-3 p-xl-4 h-100">
+              <h6 class="mb-3"><i class="bi bi-card-checklist me-2"></i>Dataset Summary</h6>
+
+              {% if summary and summary.rows %}
+              <!-- KPI row -->
+              <div class="row g-3 mb-3">
+                <div class="col-6 col-md-3">
+                  <div class="kpi">
+                    <div class="kpi-label">Latest Price</div>
+                    <div class="kpi-value">${{ summary.last_price }}</div>
+                    <div class="kpi-sub">{{ summary.currency }}</div>
+                  </div>
+                </div>
+                <div class="col-6 col-md-3">
+                  <div class="kpi">
+                    <div class="kpi-label">Cumulative Return</div>
+                    <div class="kpi-value">
+                      {{ summary.cum_return_pct is not none and summary.cum_return_pct ~ '%' or '—' }}
+                    </div>
+                    <div class="kpi-sub">From start to end</div>
+                  </div>
+                </div>
+                <div class="col-6 col-md-3">
+                  <div class="kpi">
+                    <div class="kpi-label">CAGR</div>
+                    <div class="kpi-value">
+                      {{ summary.cagr_pct is not none and summary.cagr_pct ~ '%' or '—' }}
+                    </div>
+                    <div class="kpi-sub">Annualized growth</div>
+                  </div>
+                </div>
+                <div class="col-6 col-md-3">
+                  <div class="kpi">
+                    <div class="kpi-label">% Up Days</div>
+                    <div class="kpi-value">
+                      {{ summary.up_days_pct is not none and summary.up_days_pct ~ '%' or '—' }}
+                    </div>
+                    <div class="kpi-sub">Winning days</div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Date range + SMA + 52w/Volume -->
+              <div class="row g-4">
+                <div class="col-12 col-md-5">
+                  <dl class="dl-compact">
+                    <dt>Date Range</dt>
+                    <dd>{{ summary.start }} → {{ summary.end }}</dd>
+                    <div class="text-muted small">~{{ summary.duration_days }} days ({{ summary.duration_years }} yrs)
+                    </div>
+
+                    <dt class="mt-3">SMA Windows</dt>
+                    <dd>
+                      {{ summary.sma1 }}
+                      {% if summary.sma2 %}&nbsp;&amp;&nbsp;{{ summary.sma2 }}{% endif %}
+                    </dd>
+                  </dl>
+                </div>
+
+                <div class="col-12 col-md-7">
+                  <dl class="dl-compact">
+                    <dt>52-Week High / Low</dt>
+                    <dd>
+                      {{ summary.hi_52w is not none and '$' ~ summary.hi_52w or '—' }} /
+                      {{ summary.lo_52w is not none and '$' ~ summary.lo_52w or '—' }}
+                      <span class="text-muted small ms-2">({{ summary.off_high_pct is not none and summary.off_high_pct
+                        ~ '%' or '—' }} from high)</span>
+                    </dd>
+
+                    <dt class="mt-3">Avg Daily Volume</dt>
+                    <dd>{{ summary.avg_volume }}</dd>
+                  </dl>
+                </div>
+              </div>
+
+              <div class="section-sep"></div>
+
+              <!-- Best/Worst day row -->
+              <div class="row g-3 mb-2">
+                <div class="col-6">
+                  <div class="kpi">
+                    <div class="kpi-label">Best Day</div>
+                    <div class="kpi-value">{{ summary.best_day_pct is not none and summary.best_day_pct ~ '%' or '—' }}
+                    </div>
+                    <div class="kpi-sub">{{ summary.best_day_date or '—' }}</div>
+                  </div>
+                </div>
+                <div class="col-6">
+                  <div class="kpi">
+                    <div class="kpi-label">Worst Day</div>
+                    <div class="kpi-value">{{ summary.worst_day_pct is not none and summary.worst_day_pct ~ '%' or '—'
+                      }}</div>
+                    <div class="kpi-sub">{{ summary.worst_day_date or '—' }}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="section-sep"></div>
+
+              <!-- Streaks & simple model -->
+              <div class="row g-4">
+                <div class="col-12 col-lg-6">
+                  <dl class="dl-compact mb-0">
+                    <dt>Streaks (runs)</dt>
+                    <dd class="mb-1">
+                      <span class="text-success fw-semibold">{{ summary.runs_total_up }}</span> up-runs
+                      <span class="text-muted">({{ summary.runs_days_up }} days total)</span>,
+                      longest up streak <strong>{{ summary.runs_longest_up }}</strong> days
+                    </dd>
+                    <dd>
+                      <span class="text-danger fw-semibold">{{ summary.runs_total_down }}</span> down-runs
+                      <span class="text-muted">({{ summary.runs_days_down }} days total)</span>,
+                      longest down streak <strong>{{ summary.runs_longest_down }}</strong> days
+                    </dd>
+                  </dl>
+                </div>
+                <div class="col-12 col-lg-6">
+                  <dl class="dl-compact mb-0">
+                    <dt>Simple trading model</dt>
+                    <dd>
+                      Using Best Time to Buy/Sell II method, total profit is
+                      <strong>${{ summary.max_profit }}</strong>
+                      <span class="text-muted">across {{ summary.num_trades }} trades</span>
+                    </dd>
+                  </dl>
+                </div>
+              </div>
+
+              {% else %}
+              <div class="muted">No summary yet.</div>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- JS -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script>
+    // Enable tooltips
+    const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+    tooltipTriggerList.map(el => new bootstrap.Tooltip(el));
+
+    // Toggle SMA #2 input
+    const toggle = document.getElementById('sma2Toggle');
+    const sma2 = document.getElementById('sma2');
+    function updateSMA2() { if (sma2 && toggle) sma2.disabled = !toggle.checked; }
+    if (toggle) { toggle.addEventListener('change', updateSMA2); updateSMA2(); }
+
+    // Calendar buttons open native date pickers
+    function hookDateButton(btnId, inputId) {
+      const btn = document.getElementById(btnId);
+      const input = document.getElementById(inputId);
+      if (!btn || !input) return;
+      btn.addEventListener('click', () => {
+        if (input.showPicker) input.showPicker(); else { input.focus(); input.click(); }
+      });
+    }
+    hookDateButton('btn_start', 'start_date');
+    hookDateButton('btn_end', 'end_date');
+  </script>
+</body>
+
+</html>
