@@ -1,4 +1,5 @@
 from __future__ import annotations
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
@@ -13,8 +14,11 @@ _PLOT_CONFIG = dict(
     toImageButtonOptions=dict(scale=2, format="png"),
 )
 
+_SYMBOLS = {
+    "USD": "$", "SGD": "S$", "EUR": "€", "GBP": "£", "JPY": "¥", "CNY": "¥",
+    "AUD": "A$", "CAD": "C$"
+}
 
-_SYMBOLS = {"USD": "$", "SGD": "S$", "EUR": "€", "GBP": "£", "JPY": "¥", "CNY": "¥", "AUD": "A$", "CAD": "C$"}
 def _cur_label(code: str) -> str:
     code = (code or "").upper()
     return _SYMBOLS.get(code, code or "USD")
@@ -44,28 +48,87 @@ def _range_tools(fig: go.Figure):
 def fig_to_html(fig: go.Figure) -> str:
     return fig.to_html(include_plotlyjs="cdn", full_html=False, config=_PLOT_CONFIG)
 
-def plot_price_vs_sma(df: pd.DataFrame, sma_cols=None, title="Price & SMA", currency: str = "USD") -> str:
+def plot_price_vs_sma(
+    df: pd.DataFrame,
+    sma_cols=None,
+    title: str = "Price & SMA",
+    currency: str = "USD",
+    # NEW: optional warm-up masks (bool arrays aligned to df) to render the early
+    # partial-window values in a lighter/dashed style.
+    sma_warmup_masks: list[np.ndarray] | None = None,
+) -> str:
+    #Plot Close price and up to two SMA lines.
+
+    #If `sma_warmup_masks` is provided (same order/length as `sma_cols`), points where the
+    #SMA used fewer than `window` samples (warm-up) are drawn as a lighter/dashed segment,
+    #while the full-window part is drawn normally with a legend entry.
     sma_cols = sma_cols or []
+    sma_warmup_masks = sma_warmup_masks or [None] * len(sma_cols)
+
     df = df.copy()
     df["Date"] = pd.to_datetime(df["Date"])
 
     cur = _cur_label(currency)
 
     fig = go.Figure()
+    # Close
     fig.add_trace(go.Scatter(
         x=df["Date"], y=df["Close"],
         mode="lines", name="Close",
         line=dict(width=2, color="#58a6ff")
     ))
 
-    palette = ["#f6c177", "#7ee787"]
+    palette = ["#f6c177", "#7ee787"]  # you can add more colors if needed
+
+    def _label_from_col(col: str) -> str:
+        return f"SMA({col.split('_')[1]})" if "_" in col and len(col.split('_')) > 1 else col
+
+    # Add SMAs (up to two)
     for i, col in enumerate(sma_cols[:2]):
-        if col in df.columns:
-            label = f"SMA({col.split('_')[1]})" if "_" in col else col
+        if col not in df.columns:
+            continue
+
+        color = palette[i % len(palette)]
+        label = _label_from_col(col)
+        warm_mask = sma_warmup_masks[i] if (sma_warmup_masks and i < len(sma_warmup_masks)) else None
+
+        # same line style for *both* segments; legend entry only on the full window
+        line_style = dict(color=color, width=2, dash="dash")
+
+        if warm_mask is None:
+            # single standard line
             fig.add_trace(go.Scatter(
                 x=df["Date"], y=df[col],
-                mode="lines", name=label,
-                line=dict(width=2, dash="dash", color=palette[i])
+                mode="lines",
+                name=label,
+                legendgroup=label,
+                line=line_style
+            ))
+        else:
+            # split into 2 traces but keep same name/style; hover shows SMA label (not "trace 1")
+            y = df[col].to_numpy()
+            warm_mask = np.asarray(warm_mask, dtype=bool)
+
+            # warm-up segment (no legend entry, but has the SAME name so hover says "SMA(...)")
+            y_warm = np.where(warm_mask, y, float("nan"))
+            fig.add_trace(go.Scatter(
+                x=df["Date"], y=y_warm, mode="lines",
+                name=label,
+                legendgroup=label,
+                showlegend=False,            # avoid duplicate legend rows
+                line=line_style,
+                hoverinfo="x+y+name"
+            ))
+
+            # full-window segment (with legend)
+            y_full = np.where(~warm_mask, y, float("nan"))
+            fig.add_trace(go.Scatter(
+                x=df["Date"], y=y_full, mode="lines",
+                name=label,
+                legendgroup=label,
+                showlegend=True,
+                line=line_style,
+                hoverinfo="x+y+name"
             ))
 
     fig.update_layout(
@@ -83,7 +146,13 @@ def plot_price_vs_sma(df: pd.DataFrame, sma_cols=None, title="Price & SMA", curr
     _legend_outside(fig)
     return fig_to_html(fig)
 
-def plot_runs_overlay(df: pd.DataFrame, run_df: pd.DataFrame, title="Candlesticks", min_run_len: int = 2, currency: str = "USD") -> str:
+def plot_runs_overlay(
+    df: pd.DataFrame,
+    run_df: pd.DataFrame,
+    title: str = "Candlesticks",
+    min_run_len: int = 2,
+    currency: str = "USD",
+) -> str:
     df = df.copy()
     df["Date"] = pd.to_datetime(df["Date"])
     cur = _cur_label(currency)
@@ -99,6 +168,7 @@ def plot_runs_overlay(df: pd.DataFrame, run_df: pd.DataFrame, title="Candlestick
             name="", showlegend=False
         )
     ])
+    # legend proxies
     fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers",
                              marker=dict(color="#2ecc71"), name="Up candles"))
     fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers",
