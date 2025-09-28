@@ -1,3 +1,4 @@
+from __future__ import annotations
 from flask import Flask, render_template, request, flash
 import pandas as pd
 from math import sqrt
@@ -93,9 +94,23 @@ def index():
                 df = df.sort_values("Date").reset_index(drop=True)
 
                 # ---- Metrics ----
-                df[f"SMA_{sma1}d"] = compute_sma(df["Close"].values, sma1)
+                # SMA #1 with warm-up mask (shows partial averages from day 1)
+                sma1_vals, sma1_warm = compute_sma(
+                    df["Close"].values, sma1, min_periods=1, return_warmup_mask=True
+                )
+                df[f"SMA_{sma1}d"] = sma1_vals
+
+                # Optional SMA #2
+                sma_masks = [sma1_warm]
+                sma_cols = [f"SMA_{sma1}d"]
                 if sma2:
-                    df[f"SMA_{sma2}d"] = compute_sma(df["Close"].values, sma2)
+                    sma2_vals, sma2_warm = compute_sma(
+                        df["Close"].values, sma2, min_periods=1, return_warmup_mask=True
+                    )
+                    df[f"SMA_{sma2}d"] = sma2_vals
+                    sma_cols.append(f"SMA_{sma2}d")
+                    sma_masks.append(sma2_warm)
+
                 df["DailyReturn"] = daily_returns(df["Close"].values)
 
                 run_stats, run_df = compute_runs(df["Close"].values)
@@ -183,9 +198,16 @@ def index():
                 candle_title = f"{ticker} — Candlesticks"
 
                 # ---- Charts ----
-                sma_cols = [f"SMA_{sma1}d"] + ([f"SMA_{sma2}d"] if sma2 else [])
-                chart1_html = plot_price_vs_sma(df, sma_cols=sma_cols, title=line_title, currency=currency)
-                chart2_html = plot_runs_overlay(df, run_df, title=candle_title, min_run_len=min_run_len, currency=currency)
+                chart1_html = plot_price_vs_sma(
+                    df,
+                    sma_cols=sma_cols,
+                    title=line_title,
+                    currency=currency,
+                    sma_warmup_masks=sma_masks,  # <-- new: draw warm-up lighter/dashed
+                )
+                chart2_html = plot_runs_overlay(
+                    df, run_df, title=candle_title, min_run_len=min_run_len, currency=currency
+                )
 
                 # ---- Preview: most recent first ----
                 preview_df = (
