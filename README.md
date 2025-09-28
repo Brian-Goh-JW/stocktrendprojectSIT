@@ -1,0 +1,2 @@
+# stocktrendprojectSIT
+GROUP PROJECT PROGRAMMING
