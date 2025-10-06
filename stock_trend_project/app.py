@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 from flask import Flask, render_template, request, flash
 import pandas as pd
+from pandas.tseries.offsets import BDay
 from math import sqrt
 
 # Project modules
@@ -9,7 +11,7 @@ from analytics.plotting import plot_price_vs_sma, plot_runs_overlay
 from analytics.utils import normalize_columns, parse_date_column, ensure_ohlcv
 from analytics.loader import load_from_yfinance
 
-# yfinance direct (for start/end date fetching)
+# yfinance direct (for explicit start/end fetches)
 try:
     import yfinance as yf
 except Exception:
@@ -19,13 +21,29 @@ app = Flask(__name__)
 app.secret_key = "replace-this-with-a-random-secret"
 
 
-def _fetch_data(ticker: str, start_date: str | None, end_date: str | None, fallback_period: str = "3y") -> pd.DataFrame:
-    """If start/end provided, fetch with date range, else fall back to period (default 3y)."""
+def _fetch_data_with_buffer(
+    ticker: str,
+    start_date: str | None,
+    end_date: str | None,
+    buffer_days: int = 0,
+    fallback_period: str = "3y",
+) -> pd.DataFrame:
+    """
+    If start/end provided, fetch with an extra buffer of business days before start.
+    Returns the WHOLE df (including the buffer).
+    """
     if (start_date or end_date) and yf is not None:
-        df = yf.download(ticker, start=start_date or None, end=end_date or None, progress=False)
-        df = df.reset_index()  # Date becomes a column
-        return df
-    # fallback to our loader by period
+        sd = pd.to_datetime(start_date) if start_date else None
+        ed = pd.to_datetime(end_date) if end_date else None
+
+        if sd is not None and buffer_days > 0:
+            # subtract business days so the first visible day has a fully-formed SMA
+            sd = (sd - BDay(buffer_days)).date()
+
+        df = yf.download(ticker, start=sd, end=ed, progress=False)
+        return df.reset_index()
+
+    # Fallback to our period-based loader (no explicit dates provided)
     return load_from_yfinance(ticker, period=fallback_period)
 
 
@@ -80,43 +98,54 @@ def index():
             if not ticker:
                 flash("Please enter a ticker (e.g., AAPL).", "warning")
             else:
-                # ---- Load & normalize ----
-                df = _fetch_data(ticker, start_date, end_date, fallback_period=fallback_period)
-                flash(
-                    f"Loaded {ticker} data via Yahoo Finance"
-                    + (f" for {start_date or 'beginning'} → {end_date or 'today'}." if (start_date or end_date) else f" ({fallback_period})."),
-                    "success"
+                # -------- Fetch with buffer so SMA is correct on the first visible day --------
+                # Buffer equals the largest SMA window requested (you can add +5 safety if you like)
+                buffer_days = max(sma1, sma2 or 0)
+
+                df = _fetch_data_with_buffer(
+                    ticker=ticker,
+                    start_date=start_date,
+                    end_date=end_date,
+                    buffer_days=buffer_days,
+                    fallback_period=fallback_period,
                 )
 
+                flash(
+                    f"Loaded {ticker} data via Yahoo Finance"
+                    + (
+                        f" for {start_date or 'beginning'} → {end_date or 'today'} (with {buffer_days} business-day buffer)."
+                        if (start_date or end_date)
+                        else f" ({fallback_period})."
+                    ),
+                    "success",
+                )
+
+                # -------- Normalize / prepare --------
                 df = normalize_columns(df, ticker=ticker)
                 df = ensure_ohlcv(df)
                 df = parse_date_column(df)
                 df = df.sort_values("Date").reset_index(drop=True)
 
-                # ---- Metrics ----
-                # SMA #1 with warm-up mask (shows partial averages from day 1)
-                sma1_vals, sma1_warm = compute_sma(
-                    df["Close"].values, sma1, min_periods=1, return_warmup_mask=True
-                )
-                df[f"SMA_{sma1}d"] = sma1_vals
-
-                # Optional SMA #2
-                sma_masks = [sma1_warm]
-                sma_cols = [f"SMA_{sma1}d"]
+                # -------- Compute indicators on the *buffered* data --------
+                df[f"SMA_{sma1}d"] = compute_sma(df["Close"].values, sma1)
                 if sma2:
-                    sma2_vals, sma2_warm = compute_sma(
-                        df["Close"].values, sma2, min_periods=1, return_warmup_mask=True
-                    )
-                    df[f"SMA_{sma2}d"] = sma2_vals
-                    sma_cols.append(f"SMA_{sma2}d")
-                    sma_masks.append(sma2_warm)
-
+                    df[f"SMA_{sma2}d"] = compute_sma(df["Close"].values, sma2)
                 df["DailyReturn"] = daily_returns(df["Close"].values)
 
+                # -------- Now trim back to the exact user range (if provided) --------
+                if start_date or end_date:
+                    sd = pd.to_datetime(start_date) if start_date else df["Date"].min()
+                    ed = pd.to_datetime(end_date) if end_date else df["Date"].max()
+                    df = df[(df["Date"] >= sd) & (df["Date"] <= ed)].reset_index(drop=True)
+
+                # Defensive check after trimming
+                if df.empty:
+                    raise ValueError("No data in the chosen date range. Try widening the range or another ticker.")
+
+                # -------- Additional metrics for summary --------
                 run_stats, run_df = compute_runs(df["Close"].values)
                 total_profit, trades = extract_trades(df["Close"].tolist())
 
-                # ---- Friendly summary numbers ----
                 start_dt = df["Date"].min()
                 end_dt = df["Date"].max()
                 period_days = (end_dt - start_dt).days + 1
@@ -148,7 +177,7 @@ def index():
 
                 avg_vol = int(df["Volume"].mean()) if "Volume" in df.columns else None
 
-                # ---- Summary for template ----
+                # -------- Summary dict for template --------
                 summary = {
                     "ticker": ticker,
                     "rows": int(len(df)),
@@ -191,25 +220,18 @@ def index():
                     "currency": currency,
                 }
 
-                # ---- Titles ----
+                # -------- Titles --------
                 sma_list = [f"{sma1}d"] + ([f"{sma2}d"] if sma2 else [])
                 sma_suffix = f" ({', '.join(sma_list)})" if sma_list else ""
                 line_title = f"{ticker} — Price & SMA{sma_suffix}"
                 candle_title = f"{ticker} — Candlesticks"
 
-                # ---- Charts ----
-                chart1_html = plot_price_vs_sma(
-                    df,
-                    sma_cols=sma_cols,
-                    title=line_title,
-                    currency=currency,
-                    sma_warmup_masks=sma_masks,  # <-- new: draw warm-up lighter/dashed
-                )
-                chart2_html = plot_runs_overlay(
-                    df, run_df, title=candle_title, min_run_len=min_run_len, currency=currency
-                )
+                # -------- Charts --------
+                sma_cols = [f"SMA_{sma1}d"] + ([f"SMA_{sma2}d"] if sma2 else [])
+                chart1_html = plot_price_vs_sma(df, sma_cols=sma_cols, title=line_title, currency=currency)
+                chart2_html = plot_runs_overlay(df, run_df, title=candle_title, min_run_len=min_run_len, currency=currency)
 
-                # ---- Preview: most recent first ----
+                # -------- Preview (most recent first) --------
                 preview_df = (
                     df.sort_values("Date", ascending=False)
                       .head(100)
