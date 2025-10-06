@@ -23,15 +23,22 @@ def _cur_label(code: str) -> str:
     code = (code or "").upper()
     return _SYMBOLS.get(code, code or "USD")
 
-def _legend_outside(fig: go.Figure):
+def _legend_top_left(fig: go.Figure):
+    """
+    Place the legend horizontally at the TOP-LEFT, above the plotting area,
+    so it never overlaps a centered title.
+    """
     fig.update_layout(
         legend=dict(
             orientation="h",
-            yanchor="bottom",
-            y=1.10,
+            x=0.0,              # left
             xanchor="left",
-            x=0,
-            bgcolor="rgba(0,0,0,0)"
+            y=1.12,             # a bit above the plotting area
+            yanchor="bottom",
+            bgcolor="rgba(0,0,0,0)",
+            font=dict(size=12, color="#eaf5ff"),
+            itemclick="toggleothers",
+            itemdoubleclick="toggle"
         )
     )
 
@@ -53,15 +60,9 @@ def plot_price_vs_sma(
     sma_cols=None,
     title: str = "Price & SMA",
     currency: str = "USD",
-    # NEW: optional warm-up masks (bool arrays aligned to df) to render the early
-    # partial-window values in a lighter/dashed style.
     sma_warmup_masks: list[np.ndarray] | None = None,
 ) -> str:
-    #Plot Close price and up to two SMA lines.
-
-    #If `sma_warmup_masks` is provided (same order/length as `sma_cols`), points where the
-    #SMA used fewer than `window` samples (warm-up) are drawn as a lighter/dashed segment,
-    #while the full-window part is drawn normally with a legend entry.
+    # Plot Close price and up to two SMA lines.
     sma_cols = sma_cols or []
     sma_warmup_masks = sma_warmup_masks or [None] * len(sma_cols)
 
@@ -78,7 +79,7 @@ def plot_price_vs_sma(
         line=dict(width=2, color="#58a6ff")
     ))
 
-    palette = ["#f6c177", "#7ee787"]  # you can add more colors if needed
+    palette = ["#f6c177", "#7ee787"]  # add more if needed
 
     def _label_from_col(col: str) -> str:
         return f"SMA({col.split('_')[1]})" if "_" in col and len(col.split('_')) > 1 else col
@@ -92,11 +93,9 @@ def plot_price_vs_sma(
         label = _label_from_col(col)
         warm_mask = sma_warmup_masks[i] if (sma_warmup_masks and i < len(sma_warmup_masks)) else None
 
-        # same line style for *both* segments; legend entry only on the full window
         line_style = dict(color=color, width=2, dash="dash")
 
         if warm_mask is None:
-            # single standard line
             fig.add_trace(go.Scatter(
                 x=df["Date"], y=df[col],
                 mode="lines",
@@ -105,17 +104,16 @@ def plot_price_vs_sma(
                 line=line_style
             ))
         else:
-            # split into 2 traces but keep same name/style; hover shows SMA label (not "trace 1")
             y = df[col].to_numpy()
             warm_mask = np.asarray(warm_mask, dtype=bool)
 
-            # warm-up segment (no legend entry, but has the SAME name so hover says "SMA(...)")
+            # warm-up segment (no legend entry)
             y_warm = np.where(warm_mask, y, float("nan"))
             fig.add_trace(go.Scatter(
                 x=df["Date"], y=y_warm, mode="lines",
                 name=label,
                 legendgroup=label,
-                showlegend=False,            # avoid duplicate legend rows
+                showlegend=False,
                 line=line_style,
                 hoverinfo="x+y+name"
             ))
@@ -133,17 +131,18 @@ def plot_price_vs_sma(
 
     fig.update_layout(
         template=DARK_TEMPLATE,
-        title=dict(text=title, x=0.5),
+        title=dict(text=title, x=0.5, y=0.97, xanchor="center", yanchor="top", pad=dict(b=4)),
         xaxis_title="Date",
         yaxis_title=f"Price ({cur})",
-        margin=dict(l=40, r=24, t=80, b=44),  # smaller top since buttons removed
+        margin=dict(l=40, r=24, t=120, b=56),  # extra top margin for legend area
         paper_bgcolor="#0b0f14",
         plot_bgcolor="#11161c",
     )
+    fig.update_layout(title_font=dict(size=18, color="#eaf5ff", family="Segoe UI"))
     fig.update_yaxes(tickprefix=_SYMBOLS.get(currency.upper(), "") or None)
 
     _range_tools(fig)
-    _legend_outside(fig)
+    _legend_top_left(fig)
     return fig_to_html(fig)
 
 def plot_runs_overlay(
@@ -176,15 +175,16 @@ def plot_runs_overlay(
 
     fig.update_layout(
         template=DARK_TEMPLATE,
-        title=dict(text=title, x=0.5),
+        title=dict(text=title, x=0.5, y=0.97, xanchor="center", yanchor="top", pad=dict(b=4)),
         xaxis_title="Date",
         yaxis_title=f"Price ({cur})",
-        margin=dict(l=40, r=24, t=80, b=44),
+        margin=dict(l=40, r=24, t=120, b=56),
         paper_bgcolor="#0b0f14",
         plot_bgcolor="#11161c",
     )
+    fig.update_layout(title_font=dict(size=18, color="#eaf5ff", family="Segoe UI"))
     fig.update_yaxes(tickprefix=_SYMBOLS.get(currency.upper(), "") or None)
 
     _range_tools(fig)
-    _legend_outside(fig)
+    _legend_top_left(fig)
     return fig_to_html(fig)
