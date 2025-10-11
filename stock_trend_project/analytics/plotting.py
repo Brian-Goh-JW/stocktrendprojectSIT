@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 
 DARK_TEMPLATE = "plotly_dark"
 
-# Hide the Plotly modebar (camera/zoom/pan icons), keep interactions
+# hide the Plotly modebar (camera/zoom/pan icons), keep interactions
 _PLOT_CONFIG = dict(
     displayModeBar=False,   # <-- hides the toolbar
     displaylogo=False,
@@ -14,11 +14,13 @@ _PLOT_CONFIG = dict(
     toImageButtonOptions=dict(scale=2, format="png"),
 )
 
+# currency symbols, fallback to code if not found
 _SYMBOLS = {
     "USD": "$", "SGD": "S$", "EUR": "€", "GBP": "£", "JPY": "¥", "CNY": "¥",
     "AUD": "A$", "CAD": "C$"
 }
 
+# return a nice currency label (e.g., 'USD' -> '$').
 def _cur_label(code: str) -> str:
     code = (code or "").upper()
     return _SYMBOLS.get(code, code or "USD")
@@ -43,7 +45,7 @@ def _legend_top_left(fig: go.Figure):
     )
 
 def _range_tools(fig: go.Figure):
-    # Remove rangeselector buttons; keep rangeslider + good hover
+    # rangeslider and crosshair
     fig.update_layout(font=dict(color="#eaf5ff"))
     fig.update_xaxes(
         rangeslider=dict(visible=True, bgcolor="rgba(255,255,255,0.06)", thickness=0.08),
@@ -52,6 +54,7 @@ def _range_tools(fig: go.Figure):
     )
     fig.update_layout(hovermode="x unified")
 
+# render a Plotly figure into an HTML snippet for the template
 def fig_to_html(fig: go.Figure) -> str:
     return fig.to_html(include_plotlyjs="cdn", full_html=False, config=_PLOT_CONFIG)
 
@@ -79,12 +82,12 @@ def plot_price_vs_sma(
         line=dict(width=2, color="#58a6ff")
     ))
 
-    palette = ["#f6c177", "#7ee787"]  # add more if needed
+    palette = ["#f6c177", "#7ee787"]  # colors for SMA1/SMA2
 
     def _label_from_col(col: str) -> str:
         return f"SMA({col.split('_')[1]})" if "_" in col and len(col.split('_')) > 1 else col
 
-    # Add SMAs (up to two)
+    # add SMAs lines (up to two)
     for i, col in enumerate(sma_cols[:2]):
         if col not in df.columns:
             continue
@@ -96,6 +99,7 @@ def plot_price_vs_sma(
         line_style = dict(color=color, width=2, dash="dash")
 
         if warm_mask is None:
+            # simple full SMA
             fig.add_trace(go.Scatter(
                 x=df["Date"], y=df[col],
                 mode="lines",
@@ -104,6 +108,7 @@ def plot_price_vs_sma(
                 line=line_style
             ))
         else:
+            # split into warm-up vs full window so legend stays clean
             y = df[col].to_numpy()
             warm_mask = np.asarray(warm_mask, dtype=bool)
 
@@ -129,6 +134,7 @@ def plot_price_vs_sma(
                 hoverinfo="x+y+name"
             ))
 
+    # layout and style
     fig.update_layout(
         template=DARK_TEMPLATE,
         title=dict(text=title, x=0.5, y=0.97, xanchor="center", yanchor="top", pad=dict(b=4)),
@@ -152,10 +158,12 @@ def plot_runs_overlay(
     min_run_len: int = 2,
     currency: str = "USD",
 ) -> str:
+    # candlestick chart
     df = df.copy()
     df["Date"] = pd.to_datetime(df["Date"])
     cur = _cur_label(currency)
-
+    
+    # base candlestick layer
     fig = go.Figure(data=[
         go.Candlestick(
             x=df["Date"],

@@ -23,9 +23,10 @@ def load_from_yfinance(ticker: str, period: str = "3y") -> pd.DataFrame:
     period : str
         Yahoo Finance period string, e.g. "1y", "2y", "5y", "max".
     """
+    # prompts error if yfinance is not installed
     if yf is None:
         raise ImportError("yfinance is not installed. Run: pip install yfinance")
-
+    
     df = yf.download(
         ticker,
         period=period,
