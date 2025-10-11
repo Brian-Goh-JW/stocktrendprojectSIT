@@ -74,40 +74,6 @@ def compute_sma_for_display(
     min_periods: Optional[int] = None,
     return_warmup_mask: bool = False,
 ) -> np.ndarray | Tuple[np.ndarray, np.ndarray]:
-    """
-    Compute SMA on the FULL (buffered) series, but return ONLY the slice
-    the user asked to see (display range).
-
-    Typical usage:
-        # user picked window=20 and visible range [start, end]
-        # loader already fetched (window-1) extra points BEFORE start
-        buf = required_buffer(window)          # 19
-        # your display_start_idx in the full array is 'buf'
-        sma_vis = compute_sma_for_display(prices_full, window, display_start_idx=buf)
-
-    Parameters
-    ----------
-    full_prices_with_buffer : np.ndarray
-        Prices including the (window-1) prior points BEFORE the visible start.
-    window : int
-        SMA window.
-    display_start_idx : int
-        Index in the full array where the user's visible range begins.
-        (If you fetched exactly (window-1) buffer points, this is window-1.)
-    display_end_idx : Optional[int]
-        End index (exclusive) of the visible range in the full array.
-        If None, returns until the end.
-    min_periods : Optional[int]
-        See compute_sma.
-    return_warmup_mask : bool
-        If True, also returns a mask for warm-up points within the *visible* slice.
-
-    Returns
-    -------
-    np.ndarray or (np.ndarray, np.ndarray)
-        SMA values sliced to [display_start_idx:display_end_idx].
-        If return_warmup_mask=True, returns (sma_slice, warmup_mask_slice).
-    """
     sma_full, warm_full = (
         compute_sma(full_prices_with_buffer, window, min_periods, True)
         if return_warmup_mask
