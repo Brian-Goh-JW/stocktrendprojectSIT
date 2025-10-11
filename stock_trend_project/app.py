@@ -1,26 +1,202 @@
 from __future__ import annotations
-
-from flask import Flask, render_template, request, flash
+from markupsafe import Markup
+from flask import (
+    Flask, render_template, request, flash, session,
+    redirect, url_for
+)
 import pandas as pd
 from pandas.tseries.offsets import BDay
 from math import sqrt
 
-# Project modules
+# ---- Project modules (your existing package) ----
 from analytics.metrics import compute_sma, compute_runs, daily_returns, extract_trades
 from analytics.plotting import plot_price_vs_sma, plot_runs_overlay
 from analytics.utils import normalize_columns, parse_date_column, ensure_ohlcv
 from analytics.loader import load_from_yfinance
 
-# yfinance direct (for explicit start/end fetches)
+# Optional: yfinance direct (for explicit start/end fetches)
 try:
     import yfinance as yf
 except Exception:
     yf = None
 
+
 app = Flask(__name__)
+# IMPORTANT: replace in production
 app.secret_key = "replace-this-with-a-random-secret"
 
 
+# =================================================
+#                 FAVOURITES (session)
+# =================================================
+FAV_KEY = "favorites_v1"
+LAST_KEY = "last_preset_v1"
+
+
+def _init_favs() -> None:
+    """Ensure the favourites list exists in session."""
+    if FAV_KEY not in session:
+        session[FAV_KEY] = []
+
+
+def _clean_form(form: dict) -> dict:
+    """
+    Standardize inputs so storage/recall is consistent.
+    - ticker uppercased/stripped
+    - empty dates -> ""
+    - sma2_enabled -> "1" or "0"
+    - numbers parsed to int where relevant
+    """
+    ticker = (form.get("ticker") or "").strip().upper()
+    start_date = (form.get("start_date") or "").strip()
+    end_date = (form.get("end_date") or "").strip()
+
+    def to_int(val, default):
+        try:
+            return int(str(val).strip())
+        except Exception:
+            return int(default)
+
+    sma1 = to_int(form.get("sma_window1", 20), 20)
+    sma2_enabled = "1" if (form.get("sma2_enabled") is not None) else "0"
+    sma2_raw = (form.get("sma_window2") or "").strip()
+    sma2 = to_int(sma2_raw, 0) if sma2_enabled == "1" else 0
+
+    min_run_len = to_int(form.get("min_run_len", 2), 2)
+
+    return {
+        "ticker": ticker,
+        "start_date": start_date,
+        "end_date": end_date,
+        "sma_window1": sma1,
+        "sma2_enabled": sma2_enabled,  # "1" or "0"
+        "sma_window2": sma2,            # 0 if disabled
+        "min_run_len": min_run_len,
+    }
+
+
+def _present_key(p: dict) -> str:
+    """
+    Unique key for a preset, concatenating a fixed set of fields.
+    Example: "AAPL | 2020-01-01 | 2023-01-01 | 20 | 0 | | 2"
+    """
+    parts = [
+        p.get("ticker", ""),
+        p.get("start_date", ""),
+        p.get("end_date", ""),
+        str(p.get("sma_window1", "")),
+        str(p.get("sma2_enabled", "0")),
+        ("" if str(p.get("sma2_enabled", "0")) == "0" else str(p.get("sma_window2", ""))),
+        str(p.get("min_run_len", "")),
+    ]
+    return " | ".join(parts)
+
+
+def _format_label(p: dict) -> str:
+    """Readable label for the navbar dropdown."""
+    t = p.get("ticker", "—")
+    sd = p.get("start_date") or "begin"
+    ed = p.get("end_date") or "today"
+    s1 = p.get("sma_window1", 20)
+    s2e = p.get("sma2_enabled", "0") == "1"
+    s2 = p.get("sma_window2", 0)
+    mrl = p.get("min_run_len", 2)
+    sma_part = f"SMA {s1}/{s2}" if s2e and s2 else f"SMA {s1}"
+    return f"{t} · {sd}→{ed} · {sma_part} · run≥{mrl}"
+
+
+def _remember_last_preset(form: dict) -> None:
+    """Save last submitted (cleaned) preset into the session."""
+    session[LAST_KEY] = _clean_form(form)
+
+
+@app.post("/favorites/add")
+def favorites_add():
+    """Add the last preset into favourites (no duplicates)."""
+    _init_favs()
+    last = session.get(LAST_KEY)
+    if not last or not last.get("ticker"):
+        flash("Nothing to favourite yet. Run an analysis first.", "warning")
+        return redirect(url_for("index"))
+
+    favs = session.get(FAV_KEY, [])
+    new_key = _present_key(last)
+    for f in favs:
+        if f.get("key") == new_key:
+            flash("That preset is already in Favourites.", "warning")
+            return redirect(url_for("index"))
+
+    favs.append({
+        "key": new_key,
+        "label": _format_label(last),
+        "params": last
+    })
+    session[FAV_KEY] = favs
+    flash("Saved to Favourites.", "success")
+    return redirect(url_for("index"))
+
+
+@app.post("/favorites/remove")
+def favorites_remove():
+    """Remove preset by index."""
+    _init_favs()
+    idx_raw = request.form.get("idx", "")
+    try:
+        idx = int(idx_raw)
+    except Exception:
+        flash("Invalid selection.", "danger")
+        return redirect(url_for("index"))
+
+    favs = session.get(FAV_KEY, [])
+    if 0 <= idx < len(favs):
+        favs.pop(idx)
+        session[FAV_KEY] = favs
+        flash("Removed from Favourites.", "success")
+    else:
+        flash("Invalid selection.", "danger")
+    return redirect(url_for("index"))
+
+
+@app.post("/favorites/use")
+def favorites_use():
+    """
+    Recall a favourite and auto-submit to '/' with stored params.
+    We render a tiny page with a hidden form that posts back to index.
+    """
+    _init_favs()
+    idx_raw = request.form.get("idx", "")
+    try:
+        idx = int(idx_raw)
+    except Exception:
+        flash("Invalid selection.", "danger")
+        return redirect(url_for("index"))
+
+    favs = session.get(FAV_KEY, [])
+    if not (0 <= idx < len(favs)):
+        flash("Invalid selection.", "danger")
+        return redirect(url_for("index"))
+
+    p = favs[idx]["params"]
+    html = f"""
+    <html><body>
+      <form id="f" method="POST" action="{url_for('index')}">
+        <input type="hidden" name="ticker" value="{p.get('ticker','')}">
+        <input type="hidden" name="start_date" value="{p.get('start_date','')}">
+        <input type="hidden" name="end_date" value="{p.get('end_date','')}">
+        <input type="hidden" name="sma_window1" value="{p.get('sma_window1',20)}">
+        {"<input type='hidden' name='sma2_enabled' value='on'>" if str(p.get('sma2_enabled','0'))=='1' else ""}
+        <input type="hidden" name="sma_window2" value="{p.get('sma_window2',0)}">
+        <input type="hidden" name="min_run_len" value="{p.get('min_run_len',2)}">
+      </form>
+      <script>document.getElementById('f').submit()</script>
+    </body></html>
+    """
+    return html
+
+
+# =================================================
+#                    INDEX
+# =================================================
 def _fetch_data_with_buffer(
     ticker: str,
     start_date: str | None,
@@ -54,12 +230,6 @@ def _fmt_int(n):
         return "—"
 
 
-def _fmt_pct(x, digits=2):
-    if x is None:
-        return "—"
-    return f"{x:.{digits}f}%"
-
-
 def _safe_div(a, b):
     try:
         return a / b if b not in (0, None) else None
@@ -69,39 +239,51 @@ def _safe_div(a, b):
 
 @app.route("/", methods=["GET", "POST"])
 def index():
+    _init_favs()  # ensure favourites list exists
+
     chart1_html = None
     chart2_html = None
-    summary = {}
+    summary: dict = {}
     df_preview = None
 
+    # For navbar dropdown
+    favourites = session.get(FAV_KEY, [])
+
     if request.method == "POST":
-        ticker = request.form.get("ticker", "").strip().upper()
+        # Remember preset first (so /favorites/add has info)
+        _remember_last_preset(request.form)
+
+        ticker = (request.form.get("ticker") or "").strip().upper()
 
         # Date pickers
         start_date = request.form.get("start_date", "").strip() or None
         end_date = request.form.get("end_date", "").strip() or None
-        fallback_period = "3y"  # if start/end left blank
+        fallback_period = "3y"  # used when dates are blank
 
         # SMA inputs
-        sma1 = int(request.form.get("sma_window1", 20))
+        try:
+            sma1 = int(request.form.get("sma_window1", 20))
+        except Exception:
+            sma1 = 20
+
         sma2_enabled = request.form.get("sma2_enabled") is not None
-        raw_sma2 = request.form.get("sma_window2", "").strip()
+        raw_sma2 = (request.form.get("sma_window2") or "").strip()
         sma2 = int(raw_sma2) if (sma2_enabled and raw_sma2.isdigit()) else None
 
         # Runs
-        min_run_len = int(request.form.get("min_run_len", 2))
+        try:
+            min_run_len = int(request.form.get("min_run_len", 2))
+        except Exception:
+            min_run_len = 2
 
-        # Chart currency (label only)
         currency = "USD"
 
         try:
             if not ticker:
                 flash("Please enter a ticker (e.g., AAPL).", "warning")
             else:
-                # -------- Fetch with buffer so SMA is correct on the first visible day --------
-                # Buffer equals the largest SMA window requested (you can add +5 safety if you like)
+                # --- Fetch with buffer so SMA is correct on the first visible day ---
                 buffer_days = max(sma1, sma2 or 0)
-
                 df = _fetch_data_with_buffer(
                     ticker=ticker,
                     start_date=start_date,
@@ -120,29 +302,32 @@ def index():
                     "success",
                 )
 
-                # -------- Normalize / prepare --------
+                # --- Normalize / prepare ---
                 df = normalize_columns(df, ticker=ticker)
                 df = ensure_ohlcv(df)
                 df = parse_date_column(df)
                 df = df.sort_values("Date").reset_index(drop=True)
 
-                # -------- Compute indicators on the *buffered* data --------
+                # --- Indicators on buffered data ---
                 df[f"SMA_{sma1}d"] = compute_sma(df["Close"].values, sma1)
                 if sma2:
                     df[f"SMA_{sma2}d"] = compute_sma(df["Close"].values, sma2)
-                df["DailyReturn"] = daily_returns(df["Close"].values)
 
-                # -------- Now trim back to the exact user range (if provided) --------
+                # Daily returns in percent for display
+                df["DailyReturn"] = daily_returns(df["Close"].values, as_percent=True)
+                df["DailyReturn"] = df["DailyReturn"].round(2)
+                df["DailyReturn_str"] = df["DailyReturn"].astype(str) + "%"
+
+                # --- Trim to user range (if provided) ---
                 if start_date or end_date:
                     sd = pd.to_datetime(start_date) if start_date else df["Date"].min()
                     ed = pd.to_datetime(end_date) if end_date else df["Date"].max()
                     df = df[(df["Date"] >= sd) & (df["Date"] <= ed)].reset_index(drop=True)
 
-                # Defensive check after trimming
                 if df.empty:
                     raise ValueError("No data in the chosen date range. Try widening the range or another ticker.")
 
-                # -------- Additional metrics for summary --------
+                # --- Additional metrics for summary ---
                 run_stats, run_df = compute_runs(df["Close"].values)
                 total_profit, trades = extract_trades(df["Close"].tolist())
 
@@ -177,7 +362,7 @@ def index():
 
                 avg_vol = int(df["Volume"].mean()) if "Volume" in df.columns else None
 
-                # -------- Summary dict for template --------
+                # --- Summary dict for template ---
                 summary = {
                     "ticker": ticker,
                     "rows": int(len(df)),
@@ -206,38 +391,31 @@ def index():
                     "off_high_pct": round(off_high_pct, 2) if off_high_pct is not None else None,
 
                     "avg_volume": _fmt_int(avg_vol),
-
                     "runs_total_up": run_stats["total_up_runs"],
                     "runs_total_down": run_stats["total_down_runs"],
                     "runs_days_up": run_stats["days_up"],
                     "runs_days_down": run_stats["days_down"],
                     "runs_longest_up": run_stats["longest_up_run"],
                     "runs_longest_down": run_stats["longest_down_run"],
-
                     "max_profit": round(total_profit, 2),
                     "num_trades": len(trades),
-
-                    "currency": currency,
+                    "currency": "USD",
                 }
 
-                # -------- Titles --------
-                sma_list = [f"{sma1}d"] + ([f"{sma2}d"] if sma2 else [])
-                sma_suffix = f" ({', '.join(sma_list)})" if sma_list else ""
-                line_title = f"{ticker} — Price & SMA{sma_suffix}"
+                # --- Titles & charts ---
+                sma_cols = [f"SMA_{sma1}d"] + ([f"SMA_{sma2}d"] if sma2 else [])
+                line_title = f"{ticker} — Price & SMA ({', '.join([c.replace('SMA_','').replace('d','') for c in sma_cols])})"
                 candle_title = f"{ticker} — Candlesticks"
 
-                # -------- Charts --------
-                sma_cols = [f"SMA_{sma1}d"] + ([f"SMA_{sma2}d"] if sma2 else [])
-                chart1_html = plot_price_vs_sma(df, sma_cols=sma_cols, title=line_title, currency=currency)
-                chart2_html = plot_runs_overlay(df, run_df, title=candle_title, min_run_len=min_run_len, currency=currency)
+                chart1_html = plot_price_vs_sma(df, sma_cols=sma_cols, title=line_title, currency=summary["currency"])
+                run_stats, run_df = compute_runs(df["Close"].values)  # recompute to keep run_df in scope
+                chart2_html = plot_runs_overlay(df, run_df, title=candle_title, min_run_len=min_run_len, currency=summary["currency"])
 
-                # -------- Preview (most recent first) --------
-                preview_df = (
-                    df.sort_values("Date", ascending=False)
-                      .head(100)
-                      .copy()
-                )
+                # --- Preview (most recent first) ---
+                preview_df = df.sort_values("Date", ascending=False).head(100).copy()
                 preview_df["Date"] = pd.to_datetime(preview_df["Date"]).dt.strftime("%Y-%m-%d")
+                preview_df["DailyReturn"] = preview_df["DailyReturn_str"]
+                preview_df = preview_df.drop(columns=["DailyReturn_str"])
                 df_preview = preview_df.to_html(
                     classes="table table-sm table-striped table-hover table-dark mb-0",
                     index=False,
@@ -251,10 +429,15 @@ def index():
         "index.html",
         chart1_html=chart1_html,
         chart2_html=chart2_html,
-        df_preview=df_preview,
+        df_preview=Markup(df_preview) if df_preview else None,
         summary=summary,
+        favourites=favourites,
     )
 
 
+# =================================================
+#                 ENTRY POINT
+# =================================================
 if __name__ == "__main__":
+    # Running via `python app.py`
     app.run(debug=True)
